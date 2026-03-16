@@ -34,12 +34,16 @@ log = logging.getLogger(__name__)
 
 # Offensive stat columns to adjust. The corresponding def_ columns are
 # derived automatically and adjusted symmetrically.
+#
+# NOTE: We adjust attempts and percentages but NOT made counts. Adjusting
+# all three independently breaks the algebraic relationship (pct = made / att)
+# and introduces inconsistent, redundant features.
 OFF_STATS = [
-    "off_2pa", "off_2pm", "off_fg_pct_2",
-    "off_3pa", "off_3pm", "off_fg_pct_3",
-    "off_fta", "off_ftm", "off_ft_pct",
+    "off_2pa", "off_fg_pct_2",
+    "off_3pa", "off_fg_pct_3",
+    "off_fta", "off_ft_pct",
     "off_oreb", "off_dreb",
-    "off_ast", "off_to",
+    "off_ast", "off_stl", "off_blk", "off_to",
 ]
 
 # Defensive counterparts (what the team allowed).

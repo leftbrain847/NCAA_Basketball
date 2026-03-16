@@ -34,8 +34,8 @@ ROUND_NAMES = [
 ]
 
 # Final Four bracket: which regions play each other in the semis.
-# East vs West, South vs Midwest (standard NCAA bracket pairing).
-FINAL_FOUR_MATCHUPS = [("East", "West"), ("South", "Midwest")]
+# 2026 bracket: East/South on the left side, West/Midwest on the right.
+FINAL_FOUR_MATCHUPS = [("East", "South"), ("West", "Midwest")]
 
 
 def load_bracket() -> pd.DataFrame:
@@ -56,7 +56,7 @@ def _resolve_first_four(
         (updated bracket DataFrame, list of First Four game results)
     """
     ff_teams = bracket_df[bracket_df["first_four"] == "FF"].copy()
-    non_ff = bracket_df[bracket_df["first_four"] != "FF"].copy()
+    non_ff = bracket_df[bracket_df["first_four"].fillna("") != "FF"].copy()
 
     results = []
     winners = []

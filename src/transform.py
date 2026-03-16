@@ -31,8 +31,44 @@ log = logging.getLogger(__name__)
 # These are the columns we sum across all players on a team for a game.
 AGG_STATS = [
     "fgm", "fga", "2pm", "2pa", "3pm", "3pa",
-    "ftm", "fta", "oreb", "dreb", "ast", "to", "pts",
+    "ftm", "fta", "oreb", "dreb", "ast", "stl", "blk", "to", "pts",
 ]
+
+
+def _build_name_map(season: int) -> dict[str, str]:
+    """
+    Build a mapping from CBBpy's displayName (e.g. "Duke Blue Devils")
+    to location name (e.g. "Duke") using CBBpy's internal team map.
+
+    This is critical because:
+      - Boxscores use displayName ("team" column = "Duke Blue Devils")
+      - Game info uses displayName ("home_team" = "Duke Blue Devils")
+      - Our bracket_teams.csv uses location names ("Duke")
+
+    The team map CSV ships with cbbpy at:
+      cbbpy/utils/mens_team_map.csv
+    """
+    import importlib.resources
+    try:
+        # Try to find the team map from cbbpy's installed package.
+        map_path = os.path.join(
+            os.path.dirname(__import__("cbbpy").__file__),
+            "utils", "mens_team_map.csv",
+        )
+        team_map = pd.read_csv(map_path)
+    except Exception:
+        log.warning("Could not load cbbpy team map — team names will not be normalized")
+        return {}
+
+    # Filter to the requested season (or closest available).
+    season_map = team_map[team_map["season"] == season]
+    if season_map.empty:
+        latest = team_map["season"].max()
+        log.warning(f"No team map for season {season}, using {latest}")
+        season_map = team_map[team_map["season"] == latest]
+
+    # Map: "Duke Blue Devils" -> "Duke"
+    return dict(zip(season_map["team"], season_map["location"]))
 
 # The stat categories that get SOS-adjusted (rates and volume).
 # Keys are column names in the fact table; values are (made, attempted)
@@ -135,10 +171,10 @@ def _build_game_rows(team_stats: pd.DataFrame, info_df: pd.DataFrame) -> pd.Data
     merged = merged.merge(info_subset, on="game_id", how="left")
 
     # Derive per-row fields from the game metadata.
-    # home_win may be bool, int, or string after CSV round-trip. Normalize it.
-    merged["home_win"] = merged["home_win"].map(
-        {True: True, False: False, "True": True, "False": False, 1: True, 0: False}
-    )
+    # home_win may be bool, int, string, or float after CSV round-trip.
+    # Convert defensively: anything truthy-looking -> True, else False.
+    _true_vals = {True, "True", "true", "TRUE", 1, 1.0}
+    merged["home_win"] = merged["home_win"].apply(lambda x: x in _true_vals)
     merged["is_home"] = merged["team"] == merged["home_team"]
     merged["win"] = np.where(merged["is_home"], merged["home_win"], ~merged["home_win"])
     merged["win"] = merged["win"].astype(bool)
@@ -171,6 +207,18 @@ def build_fact_table(
     """
     log.info("Aggregating boxscores to team level...")
     team_stats = _aggregate_boxscore(box_df)
+
+    # Normalize team names from displayName ("Duke Blue Devils") to
+    # location ("Duke") so they match bracket_teams.csv.
+    use_season = season if season is not None else config.CURRENT_SEASON
+    name_map = _build_name_map(use_season)
+    if name_map:
+        team_stats["team"] = team_stats["team"].map(name_map).fillna(team_stats["team"])
+        for col in ["home_team", "away_team"]:
+            if col in info_df.columns:
+                info_df[col] = info_df[col].map(name_map).fillna(info_df[col])
+        mapped = sum(1 for v in team_stats["team"].unique() if v in name_map.values())
+        log.info(f"Mapped {mapped}/{team_stats['team'].nunique()} team names to location format")
 
     log.info("Building fact table...")
     fact = _build_game_rows(team_stats, info_df)
