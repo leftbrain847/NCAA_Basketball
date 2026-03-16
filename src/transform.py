@@ -57,8 +57,14 @@ def _aggregate_boxscore(box_df: pd.DataFrame) -> pd.DataFrame:
 
     Returns one row per team per game with summed counting stats.
     """
-    # Filter to real player rows (exclude team totals if present).
-    players = box_df[box_df["player"].notna() & (box_df["player"] != "")].copy()
+    # Filter to real player rows. CBBpy includes "TEAM" total rows in the
+    # boxscore that would double-count stats if included in the aggregation.
+    players = box_df[
+        box_df["player"].notna()
+        & (box_df["player"] != "")
+        & (box_df["player"].str.upper() != "TEAM")
+        & (box_df["starter"].notna())
+    ].copy()
 
     team_stats = (
         players
@@ -129,12 +135,12 @@ def _build_game_rows(team_stats: pd.DataFrame, info_df: pd.DataFrame) -> pd.Data
     merged = merged.merge(info_subset, on="game_id", how="left")
 
     # Derive per-row fields from the game metadata.
-    merged["is_home"] = merged["team"] == merged["home_team"]
-    merged["win"] = np.where(
-        merged["is_home"],
-        merged["home_win"],
-        ~merged["home_win"].astype(bool),
+    # home_win may be bool, int, or string after CSV round-trip. Normalize it.
+    merged["home_win"] = merged["home_win"].map(
+        {True: True, False: False, "True": True, "False": False, 1: True, 0: False}
     )
+    merged["is_home"] = merged["team"] == merged["home_team"]
+    merged["win"] = np.where(merged["is_home"], merged["home_win"], ~merged["home_win"])
     merged["win"] = merged["win"].astype(bool)
 
     # Parse game date.

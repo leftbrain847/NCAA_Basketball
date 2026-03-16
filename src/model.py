@@ -151,16 +151,13 @@ def predict_matchup(
     Returns:
         Dict with team names and win probabilities.
     """
-    from src.features import ADJ_OFF_STATS, ADJ_DEF_STATS
+    from src.features import PROFILE_STATS
 
     prof_a = team_profiles.loc[team_a]
     prof_b = team_profiles.loc[team_b]
 
     feat = {}
-    for stat in ADJ_OFF_STATS:
-        if stat in prof_a.index and stat in prof_b.index:
-            feat[f"diff_{stat}"] = prof_a[stat] - prof_b[stat]
-    for stat in ADJ_DEF_STATS:
+    for stat in PROFILE_STATS:
         if stat in prof_a.index and stat in prof_b.index:
             feat[f"diff_{stat}"] = prof_a[stat] - prof_b[stat]
 
