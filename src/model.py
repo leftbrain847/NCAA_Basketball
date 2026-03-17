@@ -2,8 +2,8 @@
 Model training and evaluation.
 
 Trains classifiers to predict game outcomes from matchup features (adjusted
-stat differentials between two teams). Supports logistic regression as the
-baseline with easy extension to other scikit-learn compatible models.
+stat differentials between two teams). Supports logistic regression, elastic
+net, random forest, and gradient boosting with automatic model selection.
 
 Includes hyperparameter optimization for recency_lambda, which is upstream
 of the model but affects the feature space.
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
@@ -74,6 +74,16 @@ def train_model(
 
     models = {
         "logistic_regression": LogisticRegression(max_iter=1000, random_state=config.RANDOM_STATE),
+        "elastic_net": LogisticRegressionCV(
+            penalty="elasticnet",
+            solver="saga",
+            l1_ratios=[0.1, 0.3, 0.5, 0.7, 0.9],
+            Cs=10,
+            cv=config.CV_FOLDS,
+            scoring="neg_log_loss",
+            max_iter=2000,
+            random_state=config.RANDOM_STATE,
+        ),
         "random_forest": RandomForestClassifier(n_estimators=200, random_state=config.RANDOM_STATE),
         "gradient_boosting": GradientBoostingClassifier(n_estimators=200, random_state=config.RANDOM_STATE),
     }
@@ -107,6 +117,15 @@ def train_model(
         f"[{model_type}] CV accuracy: {result.accuracy:.4f}, "
         f"CV log_loss: {result.log_loss:.4f}"
     )
+
+    # Log elastic net's chosen hyperparameters.
+    if model_type == "elastic_net":
+        clf = pipeline.named_steps["clf"]
+        log.info(
+            f"[elastic_net] Best C={clf.C_[0]:.4f}, "
+            f"l1_ratio={clf.l1_ratio_[0]:.2f}"
+        )
+
     return result
 
 
@@ -116,7 +135,7 @@ def compare_models(matchup_df: pd.DataFrame) -> list[TrainedModel]:
 
     Returns list of TrainedModel sorted by log_loss (best first).
     """
-    model_types = ["logistic_regression", "random_forest", "gradient_boosting"]
+    model_types = ["logistic_regression", "elastic_net", "random_forest", "gradient_boosting"]
     results = []
     for mt in model_types:
         try:
