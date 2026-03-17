@@ -100,8 +100,7 @@ def build_matchup_features(
     full_profiles = build_team_profiles(df, recency_lambda)
 
     # Group games by date for expanding-window profile computation.
-    unique_dates = df["game_date"].dropna().unique()
-    unique_dates.sort()
+    unique_dates = np.sort(df["game_date"].dropna().unique())
 
     # For efficiency, rebuild profiles at regular intervals rather than
     # per-game. Use weekly snapshots as a balance between accuracy and speed.
