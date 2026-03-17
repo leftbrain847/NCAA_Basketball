@@ -1,19 +1,19 @@
 """
-Transform raw CBBpy data into the core fact table.
+Transform raw extracted data into the core fact table.
 
 The fact table has one row per team per game. Each row contains the team's
 offensive stats and the opponent's offensive stats (i.e. what the team allowed
 defensively). This gives 2 rows per game — one from each team's perspective.
 
-CBBpy boxscore columns (after its internal parsing):
-    game_id, team, player, player_id, position, starter, min,
-    fgm, fga, 2pm, 2pa, 3pm, 3pa, ftm, fta,
-    oreb, dreb, reb, ast, stl, blk, to, pf, pts
+Handles both data sources transparently:
 
-CBBpy game info columns (subset we use):
-    game_id, home_team, away_team, home_id, away_id,
-    home_win, is_conference, is_neutral, is_postseason,
-    tournament, game_day
+    sportsdataverse:
+        - Boxscores are already team-level (no player aggregation needed).
+        - Team names are already location-format ("Duke", not "Duke Blue Devils").
+
+    cbbpy:
+        - Boxscores are player-level and need aggregation.
+        - Team names use displayName and need normalization via the team map.
 """
 
 import os
@@ -40,17 +40,10 @@ def _build_name_map(season: int) -> dict[str, str]:
     Build a mapping from CBBpy's displayName (e.g. "Duke Blue Devils")
     to location name (e.g. "Duke") using CBBpy's internal team map.
 
-    This is critical because:
-      - Boxscores use displayName ("team" column = "Duke Blue Devils")
-      - Game info uses displayName ("home_team" = "Duke Blue Devils")
-      - Our bracket_teams.csv uses location names ("Duke")
-
-    The team map CSV ships with cbbpy at:
-      cbbpy/utils/mens_team_map.csv
+    Only used when DATA_SOURCE is "cbbpy". Returns an empty dict if
+    the map is unavailable (sportsdataverse names are already normalized).
     """
-    import importlib.resources
     try:
-        # Try to find the team map from cbbpy's installed package.
         map_path = os.path.join(
             os.path.dirname(__import__("cbbpy").__file__),
             "utils", "mens_team_map.csv",
@@ -60,19 +53,16 @@ def _build_name_map(season: int) -> dict[str, str]:
         log.warning("Could not load cbbpy team map — team names will not be normalized")
         return {}
 
-    # Filter to the requested season (or closest available).
     season_map = team_map[team_map["season"] == season]
     if season_map.empty:
         latest = team_map["season"].max()
         log.warning(f"No team map for season {season}, using {latest}")
         season_map = team_map[team_map["season"] == latest]
 
-    # Map: "Duke Blue Devils" -> "Duke"
     return dict(zip(season_map["team"], season_map["location"]))
 
+
 # The stat categories that get SOS-adjusted (rates and volume).
-# Keys are column names in the fact table; values are (made, attempted)
-# tuples for computing percentages, or None for counting stats.
 STAT_CATEGORIES = {
     "fg_pct_2": ("off_2pm", "off_2pa"),
     "fg_pct_3": ("off_3pm", "off_3pa"),
@@ -87,14 +77,18 @@ STAT_CATEGORIES = {
 }
 
 
+def _is_player_level(box_df: pd.DataFrame) -> bool:
+    """Detect whether the boxscore is player-level (cbbpy) or team-level (sportsdataverse)."""
+    return "player" in box_df.columns
+
+
 def _aggregate_boxscore(box_df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate player-level boxscore rows to team-level per game.
 
     Returns one row per team per game with summed counting stats.
+    Only needed for cbbpy data — sportsdataverse data is already team-level.
     """
-    # Filter to real player rows. CBBpy includes "TEAM" total rows in the
-    # boxscore that would double-count stats if included in the aggregation.
     players = box_df[
         box_df["player"].notna()
         & (box_df["player"] != "")
@@ -171,8 +165,6 @@ def _build_game_rows(team_stats: pd.DataFrame, info_df: pd.DataFrame) -> pd.Data
     merged = merged.merge(info_subset, on="game_id", how="left")
 
     # Derive per-row fields from the game metadata.
-    # home_win may be bool, int, string, or float after CSV round-trip.
-    # Convert defensively: anything truthy-looking -> True, else False.
     _true_vals = {True, "True", "true", "TRUE", 1, 1.0}
     merged["home_win"] = merged["home_win"].apply(lambda x: x in _true_vals)
     merged["is_home"] = merged["team"] == merged["home_team"]
@@ -194,7 +186,10 @@ def build_fact_table(
     season: int | None = None,
 ) -> pd.DataFrame:
     """
-    Build the core fact table from raw CBBpy data.
+    Build the core fact table from raw extracted data.
+
+    Works with both sportsdataverse and cbbpy data. Automatically detects
+    the format and adapts accordingly.
 
     Args:
         info_df: Raw game info DataFrame from extract.
@@ -205,20 +200,30 @@ def build_fact_table(
         DataFrame with one row per team per game, containing offensive stats,
         defensive stats (what the opponent did), and game metadata.
     """
-    log.info("Aggregating boxscores to team level...")
-    team_stats = _aggregate_boxscore(box_df)
+    # Ensure game_id is string in both DataFrames for consistent joining.
+    info_df = info_df.copy()
+    box_df = box_df.copy()
+    info_df["game_id"] = info_df["game_id"].astype(str)
+    box_df["game_id"] = box_df["game_id"].astype(str)
 
-    # Normalize team names from displayName ("Duke Blue Devils") to
-    # location ("Duke") so they match bracket_teams.csv.
-    use_season = season if season is not None else config.CURRENT_SEASON
-    name_map = _build_name_map(use_season)
-    if name_map:
-        team_stats["team"] = team_stats["team"].map(name_map).fillna(team_stats["team"])
-        for col in ["home_team", "away_team"]:
-            if col in info_df.columns:
-                info_df[col] = info_df[col].map(name_map).fillna(info_df[col])
-        mapped = sum(1 for v in team_stats["team"].unique() if v in name_map.values())
-        log.info(f"Mapped {mapped}/{team_stats['team'].nunique()} team names to location format")
+    if _is_player_level(box_df):
+        # cbbpy path: aggregate player rows to team level, then normalize names.
+        log.info("Detected player-level boxscore (cbbpy) — aggregating...")
+        team_stats = _aggregate_boxscore(box_df)
+
+        use_season = season if season is not None else config.CURRENT_SEASON
+        name_map = _build_name_map(use_season)
+        if name_map:
+            team_stats["team"] = team_stats["team"].map(name_map).fillna(team_stats["team"])
+            for col in ["home_team", "away_team"]:
+                if col in info_df.columns:
+                    info_df[col] = info_df[col].map(name_map).fillna(info_df[col])
+            mapped = sum(1 for v in team_stats["team"].unique() if v in name_map.values())
+            log.info(f"Mapped {mapped}/{team_stats['team'].nunique()} team names to location format")
+    else:
+        # sportsdataverse path: already team-level with location names.
+        log.info("Detected team-level boxscore (sportsdataverse) — no aggregation needed")
+        team_stats = box_df[["game_id", "team"] + [c for c in AGG_STATS if c in box_df.columns]].copy()
 
     log.info("Building fact table...")
     fact = _build_game_rows(team_stats, info_df)

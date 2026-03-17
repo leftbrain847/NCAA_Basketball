@@ -17,6 +17,18 @@ CURRENT_SEASON = 2026
 HISTORICAL_SEASONS = list(range(2016, 2026))
 
 # ---------------------------------------------------------------------------
+# Data Source
+# ---------------------------------------------------------------------------
+# "cbbpy"            — scrape ESPN via CBBpy (slow, day-by-day)
+# "sportsdataverse"  — pre-built parquet files via sportsdataverse (fast, seconds)
+DATA_SOURCE = "sportsdataverse"
+
+# Base URL for sportsdataverse parquet files on GitHub Releases.
+SDV_BASE_URL = "https://github.com/sportsdataverse/sportsdataverse-data/releases/download"
+SDV_TEAM_BOX_TAG = "espn_mens_college_basketball_team_boxscores"
+SDV_SCHEDULE_TAG = "espn_mens_college_basketball_schedules"
+
+# ---------------------------------------------------------------------------
 # SOS Adjustment
 # ---------------------------------------------------------------------------
 # "additive" or "multiplicative"
